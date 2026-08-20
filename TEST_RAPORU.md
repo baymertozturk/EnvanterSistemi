@@ -245,7 +245,8 @@ ayar olmadan çalışır.
 | `test` | JDK 25 kurulumu + `mvn clean test` (30 test) | ✅ success |
 | `build-docker` (×4) | Her servis için multi-stage Docker image build | ✅ success |
 
-**Son çalıştırma:** [run 32427866020](https://github.com/baymertozturk/EnvanterSistemi/actions/runs/32427866020) — **5/5 job yeşil**.
+**Son çalıştırma:** [run 32428331889](https://github.com/baymertozturk/EnvanterSistemi/actions/runs/32428331889) — **5/5 job yeşil**.
+Tüm çalıştırmalar: [Actions sekmesi](https://github.com/baymertozturk/EnvanterSistemi/actions)
 
 Pipeline'a ayrıca eklenenler:
 
