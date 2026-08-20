@@ -59,34 +59,70 @@ E-ticaret / tedarik zinciri senaryosunu simüle eden, **4 mikroservisten** oluş
 - Docker & Docker Compose
 - Maven 3.8+
 
-### 1. Altyapıyı Başlat
+### 1. Tüm Sistemi Tek Komutla Başlat
 
 ```bash
-docker compose up -d
+docker compose up --build
 ```
 
-Bu komut PostgreSQL (4 ayrı veritabanı), Redis, Kafka (KRaft) ve Kafka UI'ı ayağa kaldırır.
+Bu komut 4 mikroservisi kendi imajlarından derleyip; PostgreSQL (4 ayrı veritabanı),
+Redis, Kafka (KRaft), Kafka UI, Prometheus, Grafana ve Zipkin ile birlikte ayağa kaldırır.
+Servisler altyapı `healthy` olana kadar bekler.
 
-### 2. Servisleri Çalıştır
+> **⚠️ Windows'ta proje yolu ASCII olmalı.** Docker Compose çoklu servis build'inde
+> oturum anahtarını dizin adından türetir; yolda Türkçe karakter varsa build
+> `x-docker-expose-session-sharedkey ... non-printable ASCII characters` hatasıyla
+> başarısız olur. Projeyi ASCII bir yola koyun (ör. `C:\...\supply-chain`) veya bir
+> junction üzerinden çalıştırın:
+>
+> ```powershell
+> New-Item -ItemType Junction -Path C:\sc-build -Target "<proje-yolu>"
+> docker compose -f C:\sc-build\docker-compose.yml up --build
+> ```
+>
+> Linux/macOS ve GitHub Actions bu kısıttan etkilenmez. Ayrıntı: [TEST_RAPORU.md](TEST_RAPORU.md) §7
 
-Her servis kendi dizininden çalıştırılır:
+Durdurmak için:
 
 ```bash
+docker compose down          # konteynerleri durdur
+docker compose down -v       # volume'ları da sil (sıfırdan başlamak için)
+```
+
+### 2. Servisleri Yerelde Çalıştırma (geliştirme)
+
+Alternatif olarak yalnızca altyapıyı konteynerde tutup servisleri IDE'den
+çalıştırabilirsiniz:
+
+```bash
+docker compose up -d postgres redis kafka kafka-ui
 cd order-service && mvn spring-boot:run
-cd inventory-service && mvn spring-boot:run
-cd payment-service && mvn spring-boot:run
-cd notification-service && mvn spring-boot:run
 ```
 
-### 3. Tüm Projeyi Derle
+### 3. Testleri Çalıştır
 
 ```bash
-mvn clean install
+mvn clean test
 ```
+
+30 test (birim + Testcontainers entegrasyon) çalışır, JaCoCo kapsam raporu
+`*/target/site/jacoco/index.html` altında üretilir.
 
 ### Faydalı Linkler
 
-- **Kafka UI:** http://localhost:8080
+| Arayüz | Adres |
+|---|---|
+| Kafka UI | http://localhost:8080 |
+| Grafana | http://localhost:3000 (admin/admin) |
+| Prometheus | http://localhost:9090 |
+| Zipkin (tracing) | http://localhost:9411 |
+| order-service | http://localhost:8081 |
+| inventory-service | http://localhost:8082 |
+| payment-service | http://localhost:8083 |
+| notification-service | http://localhost:8084 |
+
+Uçtan uca test sonuçları, tespit edilen hatalar ve bilinen kısıtlar için:
+**[TEST_RAPORU.md](TEST_RAPORU.md)**
 
 ## Proje Yapısı
 
@@ -98,7 +134,9 @@ mvn clean install
 ├── docker/                  # Docker yardımcı dosyaları
 │   └── postgres/
 │       └── init-databases.sh
-├── docker-compose.yml       # Altyapı container tanımları
+├── .github/workflows/ci.yml # CI pipeline (test + Docker build)
+├── docker-compose.yml       # Tüm sistem (altyapı + 4 mikroservis)
 ├── pom.xml                  # Parent (aggregator) POM
+├── TEST_RAPORU.md           # Uçtan uca test raporu
 └── README.md
 ```
