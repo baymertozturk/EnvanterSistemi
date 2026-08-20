@@ -193,31 +193,38 @@ class OrderServiceIntegrationTest {
         var response = orderService.createOrder(request);
         assertNotNull(response.getId());
 
-        // Gerçek Kafka'dan event'i oku
+        // Gerçek Kafka'dan event'i oku.
+        // NOT: 'order-created' topic'i testler arasında paylaşılıyor ve consumer
+        // 'earliest' offset'ten okuyor — yani topic'te bu sınıftaki diğer
+        // testlerin bıraktığı event'ler de olabilir. Bu yüzden "ilk mesaj" değil,
+        // BU siparişe ait event aranır (testler arası sıra bağımsızlığı).
         try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerProps)) {
             consumer.subscribe(Collections.singletonList("order-created"));
 
-            // Kafka'dan mesaj gelene kadar bekle (max 15sn)
-            ConsumerRecords<String, String> records = consumer.poll(Duration.ofSeconds(15));
-
-            // Assert — en az 1 mesaj gelmeli
-            assertFalse(records.isEmpty(),
-                    "Gerçek Kafka'da 'order-created' topic'inde en az 1 mesaj olmalı");
-
-            // İlk mesajı kontrol et
-            ConsumerRecord<String, String> record = records.iterator().next();
-            String eventJson = record.value();
-            assertNotNull(eventJson, "Event JSON boş olmamalı");
-
-            // JSON'dan orderId'yi parse et
             ObjectMapper objectMapper = new ObjectMapper();
-            Map<?, ?> eventMap = objectMapper.readValue(eventJson, Map.class);
+            Map<?, ?> matchedEvent = null;
+            long deadline = System.currentTimeMillis() + Duration.ofSeconds(30).toMillis();
 
-            assertEquals(response.getId().toString(), eventMap.get("orderId").toString(),
-                    "Event'teki orderId, siparişin ID'si ile eşleşmeli");
-            assertEquals(5, eventMap.get("quantity"),
+            while (matchedEvent == null && System.currentTimeMillis() < deadline) {
+                ConsumerRecords<String, String> records = consumer.poll(Duration.ofSeconds(5));
+                for (ConsumerRecord<String, String> record : records) {
+                    String eventJson = record.value();
+                    assertNotNull(eventJson, "Event JSON boş olmamalı");
+
+                    Map<?, ?> eventMap = objectMapper.readValue(eventJson, Map.class);
+                    if (response.getId().toString().equals(String.valueOf(eventMap.get("orderId")))) {
+                        matchedEvent = eventMap;
+                        break;
+                    }
+                }
+            }
+
+            // Assert — bu siparişe ait event gerçek Kafka'ya düşmüş olmalı
+            assertNotNull(matchedEvent,
+                    "Gerçek Kafka'daki 'order-created' topic'inde bu siparişe ait event bulunmalı");
+            assertEquals(5, matchedEvent.get("quantity"),
                     "Event'teki quantity doğru olmalı");
-            assertNotNull(eventMap.get("eventId"),
+            assertNotNull(matchedEvent.get("eventId"),
                     "Event'te benzersiz eventId bulunmalı (idempotency)");
         }
     }
