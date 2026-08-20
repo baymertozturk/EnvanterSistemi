@@ -1,0 +1,54 @@
+server:
+  port: 8084
+
+spring:
+  application:
+    name: notification-service
+
+  # --- PostgreSQL ---
+  # notification-service DB kullanmıyor (sadece log tabanlı simülasyon).
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+      - org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration
+
+  # --- Kafka ---
+  kafka:
+    bootstrap-servers: localhost:9094
+    consumer:
+      group-id: notification-service-group
+      auto-offset-reset: earliest
+    listener:
+      observation-enabled: true
+    template:
+      observation-enabled: true
+
+  # --- Redis ---
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+# --- Observability & Actuator ---
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    prometheus:
+      enabled: true
+    health:
+      show-details: always
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+  tracing:
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: http://localhost:9411/api/v2/spans
