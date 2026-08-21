@@ -65,9 +65,14 @@ E-ticaret / tedarik zinciri senaryosunu simüle eden, **4 mikroservisten** oluş
 docker compose up --build
 ```
 
-Bu komut 4 mikroservisi kendi imajlarından derleyip; PostgreSQL (4 ayrı veritabanı),
-Redis, Kafka (KRaft), Kafka UI, Prometheus, Grafana ve Zipkin ile birlikte ayağa kaldırır.
-Servisler altyapı `healthy` olana kadar bekler.
+Bu komut 4 mikroservisi ve **web arayüzünü** kendi imajlarından derleyip; PostgreSQL
+(4 ayrı veritabanı), Redis, Kafka (KRaft), Kafka UI, Prometheus, Grafana ve Zipkin ile
+birlikte ayağa kaldırır. Servisler altyapı `healthy` olana kadar bekler.
+
+Ardından tarayıcıda **http://localhost:3001** adresini açın — sistemin canlı mimari
+diyagramı gelir. "Örnek Sipariş Ver" butonuna basınca olayların 4 servis arasında
+Kafka üzerinden nasıl aktığını adım adım izleyebilirsiniz.
+Ayrıntı: [frontend/README.md](frontend/README.md)
 
 > **⚠️ Windows'ta proje yolu ASCII olmalı.** Docker Compose çoklu servis build'inde
 > oturum anahtarını dizin adından türetir; yolda Türkçe karakter varsa build
@@ -124,6 +129,7 @@ Manifestler, probe tasarımı ve ayrıntılı adımlar: **[k8s/README.md](k8s/RE
 
 | Arayüz | Adres |
 |---|---|
+| **Arayüz (canlı mimari diyagramı)** | **http://localhost:3001** |
 | Kafka UI | http://localhost:8080 |
 | Grafana | http://localhost:3000 (admin/admin) |
 | Prometheus | http://localhost:9090 |
@@ -146,6 +152,7 @@ Uçtan uca test sonuçları, tespit edilen hatalar ve bilinen kısıtlar için:
 ├── docker/                  # Docker yardımcı dosyaları
 │   └── postgres/
 │       └── init-databases.sh
+├── frontend/                # Web arayüzü (React + Vite, nginx ile sunulur)
 ├── k8s/                     # Kubernetes manifestleri (Deployment/Service/ConfigMap)
 ├── .github/workflows/ci.yml # CI pipeline (test + Docker build)
 ├── docker-compose.yml       # Tüm sistem (altyapı + 4 mikroservis)

@@ -1,0 +1,69 @@
+# =============================================================================
+# frontend — canli mimari diyagrami (React + nginx)
+#
+# nginx.conf imajin icine gomulu geldigi icin ayrica ConfigMap gerekmiyor:
+# proxy hedefleri (order-service:8081, inventory-service:8082, ...) hem
+# docker-compose aginda hem Kubernetes Service DNS'inde ayni adlarla cozuluyor.
+# Yani ayni imaj her iki ortamda da degisiklik olmadan calisiyor.
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: supply-chain
+  labels:
+    app: frontend
+    app.kubernetes.io/part-of: supply-chain
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: supply-chain-frontend:latest
+          # Imaj 'kind load docker-image' ile cluster'a aktariliyor
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+              name: http
+          # Statik icerik sunan nginx hizli acilir; startupProbe gerekmiyor.
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests: { cpu: "20m", memory: "32Mi" }
+            limits:   { memory: "128Mi" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: supply-chain
+  labels:
+    app: frontend
+spec:
+  # NodePort: kind cluster'inda tarayicidan erisebilmek icin
+  # (port-forward de kullanilabilir: kubectl port-forward svc/frontend 3001:80)
+  type: NodePort
+  selector:
+    app: frontend
+  ports:
+    - port: 80
+      targetPort: 80
+      nodePort: 30001
+      name: http

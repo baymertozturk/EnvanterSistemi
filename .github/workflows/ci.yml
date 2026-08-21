@@ -63,7 +63,7 @@ jobs:
 
     strategy:
       matrix:
-        service: [order-service, inventory-service, payment-service, notification-service]
+        service: [order-service, inventory-service, payment-service, notification-service, frontend]
 
     steps:
       - name: Checkout Source Code

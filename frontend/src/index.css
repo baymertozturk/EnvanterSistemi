@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { color-scheme: dark; }
+  body {
+    @apply bg-bg text-ink font-display antialiased;
+    /* Blueprint izgarasi — cok hafif, dikkat dagitmayacak yogunlukta */
+    background-image:
+      linear-gradient(rgba(42, 54, 70, 0.28) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(42, 54, 70, 0.28) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+  /* Klavye erisimi: odak her zaman gorunur olmali (WCAG 2.4.7) */
+  :focus-visible { @apply outline-none ring-2 ring-bus ring-offset-2 ring-offset-bg; }
+}
+
+/* Hareketi azalt tercihi olan kullanicilar icin (WCAG 2.3.3) */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

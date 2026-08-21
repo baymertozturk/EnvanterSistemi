@@ -218,6 +218,25 @@ services:
       redis:
         condition: service_healthy
 
+  # =========================================================================
+  # 4. Frontend: canli mimari diyagrami (React + nginx)
+  # nginx hem sayfayi sunar hem /api/* isteklerini servislere yonlendirir —
+  # bu sayede tek origin olusur ve Java tarafinda CORS ayari gerekmez.
+  # =========================================================================
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: supply-chain-frontend
+    ports:
+      - "3001:80"
+    depends_on:
+      - order-service
+      - inventory-service
+      - payment-service
+      - notification-service
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   redis-data:

@@ -1,0 +1,7 @@
+# Docker build baglamini kucult ve yerel ciktilarin imaja sizmasini onle
+**/target/
+**/node_modules/
+**/dist/
+**/*.tsbuildinfo
+.git/
+.github/modernize/

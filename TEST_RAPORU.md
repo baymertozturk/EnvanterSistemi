@@ -22,6 +22,8 @@
 | Uçtan uca sipariş akışı (Kubernetes içinde) | ✅ Geçti |
 | Pod silme → otomatik yeniden oluşturma | ✅ Doğrulandı (~12 sn) |
 | Konteyner çökmesi → otomatik restart | ✅ Doğrulandı (~14 sn) |
+| Web arayüzü (canlı mimari diyagramı, React + nginx) | ✅ Tamamlandı |
+| Arayüz → CORS'suz proxy mimarisi (Java kodu değişmedi) | ✅ Doğrulandı |
 
 Bu çalışma sırasında **4 adet gerçek hata** tespit edilip düzeltildi (§6). Bunlardan ikisi
 sistemin konteyner ortamında hiç çalışmamasına, biri saga akışının ortada takılmasına
@@ -471,7 +473,104 @@ tasarım kararı gerektiriyor):
 
 ---
 
-## 12. Öneriler (bu çalışmanın kapsamı dışında)
+## 12. Web Arayüzü (Canlı Mimari Diyagramı)
+
+Projeyi bilmeyen birine anlatabilmek için tek sayfalık bir arayüz eklendi.
+Ayrıntılı kullanım: [frontend/README.md](frontend/README.md)
+
+**Yığın:** React 19 · TypeScript · Vite 6 · Tailwind CSS 3 · üretimde nginx.
+Diyagram harici kütüphane kullanmaz, **inline SVG** ile çizilir.
+
+### 12.1 CORS'suz mimari
+
+Hiçbir Java servisinde CORS yapılandırması yoktu. Frontend'i ayrı portta çalıştırıp
+CORS eklemek yerine **nginx reverse proxy** tercih edildi: nginx hem statik sayfayı sunar
+hem `/api/*` isteklerini servislere yönlendirir. Tarayıcı açısından her şey tek origin'de
+(`localhost:3001`) olduğu için CORS hiç devreye girmez.
+
+**Sonuç: Java kodunda tek satır değişiklik yapılmadı.**
+
+| Yol | Hedef |
+|---|---|
+| `/api/orders` | order-service:8081/orders |
+| `/api/products` | inventory-service:8082/products |
+| `/api/health/{order,inventory,payment,notify}` | ilgili servisin `/actuator/health` ucu |
+
+Aynı `nginx.conf` hem docker-compose hem Kubernetes'te çalışıyor — servis adları iki
+ortamda da aynı çözümlendiği için imaj değiştirilmeden taşınabiliyor. Doğrulandı:
+
+```
+docker compose : /  → HTTP 200 · /api/products → ürün listesi · 4 sağlık ucu da UP
+kubernetes     : /  → HTTP 200 · /api/products → ürün listesi · /api/health/order → UP
+```
+
+### 12.2 Tespit edilen sorun: saga polling'den hızlı
+
+Arayüz ilk denemede **PENDING'den doğrudan FAILED'e** atladı. Loglar incelendiğinde stoğun
+aslında rezerve edildiği (`kalanStok=498`), ardından ödemenin %20 simülasyonuna takıldığı
+görüldü — yani gerçek akış `PENDING → STOCK_RESERVED → FAILED` idi.
+
+**Kök sebep:** Saga uçtan uca ~500–900 ms sürüyor. Hangi aralıkla yoklanırsa yoklansın ara
+adımlar kaçırılıyor. Bu, arayüzün tek işini (ara adımları göstermek) işlevsiz bırakıyordu.
+
+**Çözüm — yoklama ile gösterimin ayrılması:**
+- **Yoklayıcı** (250 ms) gerçek sonucu belirler.
+- **Oynatıcı** diyagramı sürer ve her adımı en az **1200 ms** ekranda tutar.
+
+Kaçırılan adımlar uydurulmaz; backend'in saga mantığından kesin çıkarım yapılır:
+
+| Gözlenen sonuç | Çıkarım | Dayanağı |
+|---|---|---|
+| `PAYMENT_COMPLETED` | `STOCK_RESERVED` mutlaka olmuştur | Ödeme yalnızca `stock-reserved` olayıyla tetiklenir |
+| `FAILED`, miktar > stok | Stok reddi, stok hiç değişmedi | inventory-service'in kararıyla aynı kural |
+| `FAILED`, miktar ≤ stok | Stok rezerve edildi, ödeme patladı, telafi çalıştı | %20 rastgele ödeme hatası simülasyonu |
+
+**Bu kural canlı sistemde doğrulandı.** Aynı üründen 1'er adet 6 sipariş verildi:
+
+```
+#1 stok=500  → PAYMENT_COMPLETED   inventory-rezerve-etti=1
+#2 stok=499  → PAYMENT_COMPLETED   inventory-rezerve-etti=1
+#3 stok=498  → FAILED              inventory-rezerve-etti=1   ← ödeme hatası, telafi çalıştı
+#4 stok=498  → PAYMENT_COMPLETED   inventory-rezerve-etti=1   ← stok geri açılmış (498'de kaldı)
+#5 stok=497  → PAYMENT_COMPLETED   inventory-rezerve-etti=1
+#6 stok=496  → PAYMENT_COMPLETED   inventory-rezerve-etti=1
+```
+
+Stok reddi yolu ayrıca doğrulandı: miktar=10494 (stok=495) → `FAILED`, stok değişmedi
+(495/5 → 495/5), inventory hiç rezervasyon yapmadı (sayaç 0). İki yol da çıkarım kuralıyla
+birebir örtüşüyor.
+
+### 12.3 Tasarım
+
+Jenerik "SaaS" estetiğinden bilinçli olarak kaçınıldı (mor gradient, Inter font, her yerde
+kart yok). Konsept **blueprint** — koyu mavi-arduvaz zemin üzerine teknik çizim.
+
+- **Tipografi:** Space Grotesk (geometrik, mühendislik hissi) + JetBrains Mono (servis/topic adları)
+- **Renk:** amber `#F5A524` Kafka veri yolu ve aktif adım · yeşil `#2ED47A` başarılı ·
+  kırmızı `#FF5C5C` hata · teal `#14B8A6` veri katmanı. Koyu tema, durum renkleri en yüksek
+  kontrastla okunsun diye seçildi.
+- **Erişilebilirlik:** `prefers-reduced-motion` desteklenir, odak halkaları görünürdür
+  (WCAG 2.4.7), birincil eylem en büyük hedeftir (Fitts yasası).
+
+Diyagramda her olay oku "kaynak servisten aşağı → Kafka şeridi boyunca yatay → hedef servise
+yukarı" şeklinde çizilir. Böylece hiçbir servisin diğerini **doğrudan çağırmadığı**, her şeyin
+Kafka üzerinden aktığı görsel olarak anlaşılır — event-driven mimarinin anlatılması güç olan
+kısmı budur.
+
+Servis kutularında iki ayrı gösterge vardır ve karıştırılmamalıdır: *kenarlık rengi* o
+siparişteki rolü (bekliyor/çalışıyor/bitti/hata), *sağ üstteki nokta* servisin
+`/actuator/health` durumunu gösterir.
+
+### 12.4 Dağıtım
+
+- `docker-compose.yml`'e `frontend` servisi eklendi (port **3001**) — tek komut değişmedi.
+- `k8s/24-frontend.yaml`: Deployment + Service (NodePort 30001). nginx.conf imaja gömülü
+  olduğu için ayrıca ConfigMap gerekmedi.
+- CI matrix'ine `frontend` eklendi; artık 6 job çalışıyor (test + 5 imaj).
+
+---
+
+## 13. Öneriler (bu çalışmanın kapsamı dışında)
 
 1. **Poison-pill koruması yok.** Deserialize edilemeyen tek bir mesaj, consumer'ı sonsuz
    döngüye sokup o topic'i tamamen kilitliyor (§6.3'te birebir yaşandı — offset 0'ı geçemedi).
@@ -489,7 +588,7 @@ tasarım kararı gerektiriyor):
 
 ---
 
-## 13. Sonuç
+## 14. Sonuç
 
 Sistem üç ortamda da uçtan uca doğru çalışıyor:
 
@@ -512,4 +611,4 @@ giderildi (§6).
    yapılmadan önce mutlaka giderilmeli; ölçeklendirme bu hatayı daha görünür kılar.
 2. **Proje yolundaki Türkçe karakterler (§7)** — yerel çoklu servis Docker build'ini
    kırıyor. CI ve Kubernetes bu kısıttan etkilenmiyor.
-3. **Poison-pill koruması ve kullanılmayan `COMPLETED` durumu (§12)** — öneri düzeyinde.
+3. **Poison-pill koruması ve kullanılmayan `COMPLETED` durumu (§13)** — öneri düzeyinde.
