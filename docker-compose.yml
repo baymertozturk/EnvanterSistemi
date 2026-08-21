@@ -108,6 +108,20 @@ services:
     container_name: supply-chain-zipkin
     ports:
       - "9411:9411"
+    environment:
+      # Zipkin varsayilan olarak trace'leri bellekte tutar ve sinirsiz buyur.
+      # 16 saatlik kesintisiz calismada OutOfMemoryError ile coktu; heap ve
+      # saklanan span sayisi simdi sinirli.
+      - JAVA_OPTS=-Xms128m -Xmx512m
+      - STORAGE_TYPE=mem
+      - MEM_MAX_SPANS=100000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9411/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   # =========================================================================
   # 3. Mikroservisler: order, inventory, payment, notification

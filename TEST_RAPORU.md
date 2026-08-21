@@ -210,6 +210,10 @@ kayıtlar arasından kendi siparişine ait event'i arıyor (sıra bağımsız).
   servis `localhost:6379`'a bağlanmaya çalışıp `/actuator/health` üzerinden `DOWN`
   dönüyordu. `SPRING_DATA_REDIS_HOST/PORT` ve `depends_on: redis` eklendi.
 - **compose `version` alanı:** artık geçersiz (uyarı üretiyordu), kaldırıldı.
+- **Zipkin bellek taşması:** Zipkin trace'leri varsayılan olarak bellekte ve **sınırsız**
+  saklar. 16 saat kesintisiz çalışmanın ardından `OutOfMemoryError: Java heap space` ile
+  çöktü (uygulama servisleri etkilenmedi, yalnızca tracing durdu). `JAVA_OPTS=-Xmx512m`,
+  `MEM_MAX_SPANS=100000`, `restart: unless-stopped` ve bir healthcheck eklendi.
 
 ---
 
