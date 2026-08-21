@@ -1,0 +1,10 @@
+# =============================================================================
+# Namespace — tum supply-chain kaynaklari bu namespace altinda toplanir.
+# Silmek icin: kubectl delete namespace supply-chain
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: supply-chain
+  labels:
+    app.kubernetes.io/part-of: supply-chain

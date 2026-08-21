@@ -108,6 +108,18 @@ mvn clean test
 30 test (birim + Testcontainers entegrasyon) çalışır, JaCoCo kapsam raporu
 `*/target/site/jacoco/index.html` altında üretilir.
 
+### 4. Kubernetes'e Deploy Et (opsiyonel)
+
+```bash
+kind create cluster --name supply-chain
+kind load docker-image --name supply-chain \
+  supply-chain-order-service:latest supply-chain-inventory-service:latest \
+  supply-chain-payment-service:latest supply-chain-notification-service:latest
+kubectl apply -f k8s/
+```
+
+Manifestler, probe tasarımı ve ayrıntılı adımlar: **[k8s/README.md](k8s/README.md)**
+
 ### Faydalı Linkler
 
 | Arayüz | Adres |
@@ -134,6 +146,7 @@ Uçtan uca test sonuçları, tespit edilen hatalar ve bilinen kısıtlar için:
 ├── docker/                  # Docker yardımcı dosyaları
 │   └── postgres/
 │       └── init-databases.sh
+├── k8s/                     # Kubernetes manifestleri (Deployment/Service/ConfigMap)
 ├── .github/workflows/ci.yml # CI pipeline (test + Docker build)
 ├── docker-compose.yml       # Tüm sistem (altyapı + 4 mikroservis)
 ├── pom.xml                  # Parent (aggregator) POM

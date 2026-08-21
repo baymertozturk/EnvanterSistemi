@@ -1,0 +1,108 @@
+# =============================================================================
+# PostgreSQL — her mikroservis icin ayri veritabani (orders_db, inventory_db,
+# payments_db, notifications_db). Veritabanlari asagidaki ConfigMap'teki init
+# script'i ile ilk aciliste olusturulur.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: supply-chain
+data:
+  init-databases.sh: |
+    #!/bin/bash
+    set -e
+    echo "=== Creating microservice databases ==="
+    function create_database() {
+        local database=$1
+        echo "  Creating database: $database"
+        psql -v ON_ERROR_STOP=0 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+          -c "CREATE DATABASE $database;" 2>/dev/null || true
+    }
+    create_database "orders_db"
+    create_database "inventory_db"
+    create_database "payments_db"
+    create_database "notifications_db"
+    echo "=== Database initialization complete ==="
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: supply-chain
+  labels:
+    app: postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+              name: postgres
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: supply-chain-secret
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: supply-chain-secret
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              value: postgres
+            # Veri dizinini alt klasore al: emptyDir mount'u ile cakismasin
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER"]
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 5
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits:   { memory: "512Mi" }
+      volumes:
+        - name: init-scripts
+          configMap:
+            name: postgres-init
+            defaultMode: 0755
+        # Demo cluster: kalicilik gerekmiyor. Gercek ortamda
+        # PersistentVolumeClaim kullanilmalidir.
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: supply-chain
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+      name: postgres

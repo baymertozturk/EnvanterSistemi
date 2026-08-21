@@ -1,0 +1,47 @@
+# =============================================================================
+# Zipkin — dagitik izleme (distributed tracing) toplayicisi.
+# Servisler MANAGEMENT_ZIPKIN_TRACING_ENDPOINT uzerinden span gonderir.
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zipkin
+  namespace: supply-chain
+  labels:
+    app: zipkin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zipkin
+  template:
+    metadata:
+      labels:
+        app: zipkin
+    spec:
+      containers:
+        - name: zipkin
+          image: openzipkin/zipkin:3.4
+          ports:
+            - containerPort: 9411
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 9411
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: "50m", memory: "128Mi" }
+            limits:   { memory: "512Mi" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zipkin
+  namespace: supply-chain
+spec:
+  selector:
+    app: zipkin
+  ports:
+    - port: 9411
+      targetPort: 9411

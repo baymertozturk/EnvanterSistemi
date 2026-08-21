@@ -17,10 +17,16 @@
 | Uçtan uca sipariş akışı (stok yetersiz / telafi) | ✅ Geçti |
 | Birim + entegrasyon testleri (30 test) | ✅ 0 hata |
 | GitHub Actions pipeline | ✅ Yeşil (5/5 job) |
+| Kubernetes manifestleri (Deployment/Service/ConfigMap/probe) | ✅ Tamamlandı |
+| `kubectl apply -f k8s/` ile deploy (8 Deployment + 8 Service) | ✅ Çalışıyor |
+| Uçtan uca sipariş akışı (Kubernetes içinde) | ✅ Geçti |
+| Pod silme → otomatik yeniden oluşturma | ✅ Doğrulandı (~12 sn) |
+| Konteyner çökmesi → otomatik restart | ✅ Doğrulandı (~14 sn) |
 
 Bu çalışma sırasında **4 adet gerçek hata** tespit edilip düzeltildi (§6). Bunlardan ikisi
 sistemin konteyner ortamında hiç çalışmamasına, biri saga akışının ortada takılmasına
-sebep oluyordu.
+sebep oluyordu. Kubernetes doğrulaması sırasında ayrıca **düzeltilmemiş bir yarış durumu**
+(race condition) ortaya çıktı — ayrıntısı ve önerilen çözümü §11'de.
 
 ---
 
@@ -35,6 +41,8 @@ sebep oluyordu.
 | Maven | 3.9.11 (konteyner içi), 3.9.16 (host) |
 | PostgreSQL / Redis / Kafka | 16-alpine / 7-alpine / apache-kafka 3.8.0 (KRaft) |
 | CI runner | ubuntu-latest (GitHub Actions) |
+| Kubernetes | kind v0.30.0 → cluster v1.34.0 |
+| kubectl | v1.36.1 |
 
 ---
 
@@ -260,7 +268,206 @@ Docker Hub'a push yapılmıyor — istendiği gibi yalnızca build'in başarıl�
 
 ---
 
-## 9. Öneriler (bu çalışmanın kapsamı dışında)
+## 9. Kubernetes Dağıtımı
+
+`k8s/` klasörü altında her servis için Deployment + Service, ortak ayarlar için ConfigMap
+ve kimlik bilgileri için Secret tanımlandı. Ayrıntılı kullanım: [k8s/README.md](k8s/README.md)
+
+### 9.1 Cluster
+
+Sistemde minikube veya kind kurulu değildi; Docker Desktop'ın gömülü Kubernetes'i de hiç
+etkinleştirilmemişti. **kind v0.30.0** kuruldu ve tek düğümlü bir cluster oluşturuldu.
+
+| Bileşen | Değer |
+|---|---|
+| Cluster aracı | kind v0.30.0 |
+| Kubernetes | v1.34.0 |
+| Düğüm | `supply-chain-control-plane` (tek düğüm, control-plane) |
+| Namespace | `supply-chain` |
+
+### 9.2 Kaynaklar
+
+`kubectl apply -f k8s/` ile **8 Deployment + 8 Service** oluşturuldu:
+
+| Kaynak | Tür | Not |
+|---|---|---|
+| postgres | Deployment + Service | 4 veritabanı init ConfigMap'i ile oluşturuluyor |
+| redis | Deployment + Service | |
+| kafka | Deployment + Service | KRaft, tek broker |
+| zipkin | Deployment + Service | tracing collector |
+| order / inventory / payment / notification-service | Deployment + Service | ClusterIP |
+
+**Veritabanı doğrulaması:** ConfigMap içindeki init script çalıştı, dört veritabanı da
+oluştu (`orders_db`, `inventory_db`, `payments_db`, `notifications_db`).
+
+### 9.3 Konfigürasyon Yönetimi
+
+Ortam değişkenleri iki kaynaktan geliyor:
+
+- **ConfigMap `supply-chain-config`** — hassas olmayan değerler: `POSTGRES_HOST`,
+  `POSTGRES_PORT`, `SPRING_KAFKA_BOOTSTRAP_SERVERS` (`kafka:9092`),
+  `SPRING_DATA_REDIS_HOST`, `MANAGEMENT_ZIPKIN_TRACING_ENDPOINT`, probe ayarları.
+  Servislere `envFrom` ile toplu olarak veriliyor.
+- **Secret `supply-chain-secret`** — `POSTGRES_USER` / `POSTGRES_PASSWORD`.
+  Parolaların ConfigMap'te durmaması için ayrıldı.
+
+Adresler k8s Service DNS adlarıyla (`postgres`, `kafka`, `redis`) verildiği için
+docker-compose'daki host adları birebir karşılanıyor; imaj içindeki `application.yml`
+değerleri `SPRING_*` env değişkenleriyle eziliyor.
+
+> **Dikkat edilen nokta:** JDBC URL'i
+> `jdbc:postgresql://$(POSTGRES_HOST):$(POSTGRES_PORT)/orders_db` şeklinde kuruluyor.
+> Kubernetes'in `$(VAR)` yerine koyma özelliği **yalnızca aynı `env` listesinde daha önce
+> tanımlanmış** değişkenleri görür — `envFrom` ile gelenleri görmez. Bu yüzden
+> `POSTGRES_HOST` / `POSTGRES_PORT`, `envFrom`'a ek olarak `configMapKeyRef` ile açıkça
+> tekrar tanımlandı.
+
+### 9.4 Health Probe'ları
+
+Her mikroservis üç prob kullanıyor, hepsi `/actuator/health` altında:
+
+| Prob | Yol | Periyot | Başarısız olursa |
+|---|---|---|---|
+| `startupProbe` | `/actuator/health/readiness` | 5 sn × 60 deneme | Bekler; JVM açılışına süre tanır |
+| `readinessProbe` | `/actuator/health/readiness` | 10 sn | Service endpoint'lerinden çıkarılır, **öldürülmez** |
+| `livenessProbe` | `/actuator/health/liveness` | 15 sn | Konteyner **yeniden başlatılır** |
+
+Liveness için düz `/actuator/health` yerine bilinçli olarak `/actuator/health/liveness`
+seçildi. Düz uç bağımlılıkların (DB, Redis, Kafka) durumunu da içerir; Redis birkaç saniye
+düşse **sağlıklı** pod'lar restart döngüsüne girerdi. `/liveness` yalnızca uygulamanın
+kendi canlılık durumunu yansıtır. Alt uçların açık olması için ConfigMap'te
+`MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED: "true"` verildi.
+
+Dört servisin tamamında her iki uç da doğrulandı:
+
+```
+order-service          liveness={"status":"UP"} readiness={"status":"UP"}
+inventory-service      liveness={"status":"UP"} readiness={"status":"UP"}
+payment-service        liveness={"status":"UP"} readiness={"status":"UP"}
+notification-service   liveness={"status":"UP"} readiness={"status":"UP"}
+```
+
+**Kafka probe'unda çözülen kilitlenme:** İlk tanımda readiness probe'u
+`kafka-topics.sh --bootstrap-server localhost:9092 --list` çalıştırıyordu ve pod hiçbir
+zaman `Ready` olmuyordu. Sebep: broker, bootstrap sonrası metadata olarak *advertised
+listener*'ı (`kafka:9092` = Service ClusterIP) döndürüyor; pod henüz `Ready` olmadığı için
+Service'in endpoint listesi boş ve çağrı timeout oluyor — prob kendi `Ready` olmasını
+bekliyor. `tcpSocket: 9092` ile değiştirildi (port dinlemeye zaten "Enabling request
+processing" aşamasından sonra başlıyor).
+
+---
+
+## 10. Kubernetes Doğrulama Testleri
+
+### 10.1 Uçtan uca sipariş akışı (cluster içinde)
+
+`POST /orders` → MacBook Pro 16", `quantity: 4`
+
+| Gözlem | Sonuç |
+|---|---|
+| Sipariş durumu | `PENDING` → `PAYMENT_COMPLETED` (< 3 sn) |
+| Stok | 50/0 → **46/4**, `version` 0 → 1 |
+| notification-service | "Siparişiniz hazırlandı" bildirimi alındı |
+| Tracing | `traceId` servisler arasında korundu |
+
+### 10.2 Stok yetersiz senaryosu (cluster içinde)
+
+Apple Watch Ultra (stok 75), `quantity: 9999` → durum **`FAILED`**, stok değişmedi
+(75/0, `version` 0).
+
+### 10.3 Pod'u kasıtlı silme — otomatik yeniden oluşturma
+
+```
+SILINECEK POD:  order-service-8c5dd7f87-jzcfm   (09:15:01)
+YENI POD HAZIR: order-service-8c5dd7f87-kftmv   (09:15:13)
+```
+
+Kubernetes olayları (`kubectl get events`):
+
+```
+Normal  Killing           pod/order-service-8c5dd7f87-jzcfm    Stopping container order-service
+Normal  SuccessfulCreate  replicaset/order-service-8c5dd7f87   Created pod: order-service-8c5dd7f87-kftmv
+Normal  Scheduled         pod/order-service-8c5dd7f87-kftmv    Successfully assigned to supply-chain-control-plane
+Normal  Pulled            pod/order-service-8c5dd7f87-kftmv    Image "supply-chain-order-service:latest" already present on machine
+```
+
+**Sonuç:** ReplicaSet controller, `replicas: 1` beklentisini korumak için pod'u anında
+yeniden oluşturdu; **~12 saniyede** `1/1 Running` oldu. Deployment `1/1 AVAILABLE`
+durumuna döndü. Yeni pod üzerinden gönderilen sipariş başarıyla işlendi.
+
+Olaylarda görünen `Startup probe failed: connection refused` uyarıları beklenen
+davranıştır: JVM henüz portu dinlemeye başlamamışken prob deneme yapar. `startupProbe`
+tam da bunun için vardır — bu süre boyunca liveness devreye girmez ve pod boşuna
+öldürülmez.
+
+### 10.4 Konteyner çökmesi — otomatik restart
+
+Pod silmekten farklı olarak, konteyner içindeki JVM (PID 1) öldürüldü:
+
+```
+ÖNCE:  notification-service-75ccf8f777-pr7tq  1/1  Running  restarts=0  age=5m19s
+SONRA: notification-service-75ccf8f777-pr7tq  0/1  Running  restarts=1  age=5m25s
+       notification-service-75ccf8f777-pr7tq  1/1  Running  restarts=1  age=5m35s
+```
+
+**Pod adı ve yaşı aynı kaldı, `RESTARTS` 0 → 1 oldu** — yani yeni bir pod oluşturulmadı,
+kubelet aynı pod içindeki konteyneri yeniden başlattı (~14 sn). İki mekanizmanın farkı:
+
+| Senaryo | Mekanizma | Pod adı | RESTARTS |
+|---|---|---|---|
+| Pod silme | ReplicaSet controller yeni pod oluşturur | **değişir** | 0 (yeni pod) |
+| Konteyner çökmesi / liveness hatası | kubelet konteyneri yeniden başlatır | aynı kalır | **artar** |
+
+### 10.5 Son durum
+
+8 pod'un tamamı `1/1 Running`. Yalnızca notification-service'te `RESTARTS=1` var — o da
+§10.4'teki kasıtlı testten kaynaklanıyor.
+
+---
+
+## 11. Yeni Tespit Edilen Hata: Saga Durum Yarışı (Race Condition)
+
+Kubernetes testleri sırasında, ödeme simülasyonunun **%20 rastgele başarısızlık**
+ihtimaline denk gelen bir sipariş hatalı bir son durumda kaldı.
+
+**Beklenen:** Ödeme başarısız → sipariş `FAILED`, stok telafi edilir.
+**Gerçekleşen:** Stok doğru şekilde telafi edildi (200/0, `version` 2), ancak sipariş
+`STOCK_RESERVED` durumunda takılı kaldı.
+
+Loglar sebebi net gösteriyor — **aynı milisaniyede, iki farklı listener thread'i**:
+
+```
+06:16:51.343         PaymentFailedEvent alındı              (thread: ...Container#3-0-C-1)
+06:16:51.345         StockReservedEvent alındı              (thread: ...Container#0-0-C-1)
+06:16:51.421633534   yeniDurum=FAILED (ödeme başarısız)     (thread #3)
+06:16:51.421633534   yeniDurum=STOCK_RESERVED               (thread #0)
+```
+
+`payment-failed` işlenip sipariş `FAILED` yapıldıktan sonra, geç kalan `stock-reserved`
+olayı aynı kaydın üzerine yazdı ve **terminal durumu ara duruma geri döndürdü**.
+
+**Kök sebep:** `OrderEventConsumer` içindeki dört listener (`stock-reserved`,
+`stock-rejected`, `payment-completed`, `payment-failed`) bağımsız thread'lerde çalışıyor ve
+her biri koşulsuz olarak `order.setStatus(X); save()` yapıyor. Ayrıca `Order` entity'sinde
+`@Version` alanı **yok** — yani optimistic locking de devrede değil (karşılaştırma:
+`Product` entity'sinde var ve düzgün çalışıyor). Sonuç klasik bir *lost update*:
+son yazan kazanıyor.
+
+Bu hata Kubernetes'e özgü değildir; docker-compose ortamında da oluşabilir. Yalnızca %20'lik
+ödeme hatasının olay sıralamasıyla çakışması gerektiği için seyrek görülür.
+
+**Önerilen düzeltme** (bu çalışmanın kapsamı dışında bırakıldı; saga semantiğine dair bir
+tasarım kararı gerektiriyor):
+
+1. **Durum geçiş koruması:** Terminal durumdaki (`FAILED`, `PAYMENT_COMPLETED`) bir sipariş
+   daha erken aşamalı bir duruma geri döndürülmemeli. En küçük ve en güvenli düzeltme budur.
+2. **`@Version` ile optimistic locking:** `Order` entity'sine eklenip çakışmada retry.
+3. **Sıralama garantisi:** Tüm saga olaylarını tek topic'te veya `orderId` partition key'i
+   ile tek listener üzerinden işlemek.
+
+---
+
+## 12. Öneriler (bu çalışmanın kapsamı dışında)
 
 1. **Poison-pill koruması yok.** Deserialize edilemeyen tek bir mesaj, consumer'ı sonsuz
    döngüye sokup o topic'i tamamen kilitliyor (§6.3'te birebir yaşandı — offset 0'ı geçemedi).
@@ -278,12 +485,27 @@ Docker Hub'a push yapılmıyor — istendiği gibi yalnızca build'in başarıl�
 
 ---
 
-## 10. Sonuç
+## 13. Sonuç
 
-Sistem, tek komutla sıfırdan ayağa kalkıyor ve hem başarılı hem de telafi (compensation)
-senaryolarında uçtan uca doğru çalışıyor. Java 25 geçişi tamamlandı; ancak bu geçişin
-Spring Boot yükseltmesini zorunlu kıldığı ve mevcut kodda saga akışını kesen bir Kafka
-serileştirme hatası bulunduğu tespit edilip giderildi. CI pipeline'ı 5/5 job ile yeşil.
+Sistem üç ortamda da uçtan uca doğru çalışıyor:
 
-Açık tek konu, proje klasörünün yolundaki Türkçe karakterlerin yerel çoklu-servis Docker
-build'ini kırması (§7); CI'da böyle bir sorun yok.
+- **docker compose** — tek komutla sıfırdan ayağa kalkıyor, başarılı ve telafi
+  senaryolarının ikisi de geçiyor.
+- **GitHub Actions** — 30 test + 4 Docker imaj build'i, 5/5 job yeşil.
+- **Kubernetes (kind)** — 8 Deployment + 8 Service, ConfigMap/Secret ile
+  yapılandırma, `/actuator/health` tabanlı üç katmanlı prob yapısı. Pod silindiğinde
+  ReplicaSet ~12 saniyede yenisini oluşturuyor; konteyner çöktüğünde kubelet ~14 saniyede
+  yeniden başlatıyor.
+
+Java 25 geçişi tamamlandı. Bu geçişin Spring Boot yükseltmesini zorunlu kıldığı ve mevcut
+kodda saga akışını tamamen kesen bir Kafka serileştirme hatası bulunduğu tespit edilip
+giderildi (§6).
+
+**Açık konular:**
+
+1. **Saga durum yarışı (§11)** — düzeltilmedi. Ödeme başarısızlığı ile `stock-reserved`
+   olayının çakıştığı seyrek durumda sipariş yanlış durumda kalıyor. `replicas > 1`
+   yapılmadan önce mutlaka giderilmeli; ölçeklendirme bu hatayı daha görünür kılar.
+2. **Proje yolundaki Türkçe karakterler (§7)** — yerel çoklu servis Docker build'ini
+   kırıyor. CI ve Kubernetes bu kısıttan etkilenmiyor.
+3. **Poison-pill koruması ve kullanılmayan `COMPLETED` durumu (§12)** — öneri düzeyinde.

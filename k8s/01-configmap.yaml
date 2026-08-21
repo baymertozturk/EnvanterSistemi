@@ -1,0 +1,31 @@
+# =============================================================================
+# ConfigMap — hassas OLMAYAN ortam degiskenleri.
+# Servis adresleri k8s Service DNS adlariyla verilir:
+#   <service-adi>.<namespace>.svc.cluster.local — ayni namespace'te kisaca
+#   <service-adi> yeterlidir (ornek: "postgres", "kafka").
+# Sifreler burada DEGIL, 02-secret.yaml icindedir.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: supply-chain-config
+  namespace: supply-chain
+  labels:
+    app.kubernetes.io/part-of: supply-chain
+data:
+  # --- Altyapi adresleri ---
+  POSTGRES_HOST: "postgres"
+  POSTGRES_PORT: "5432"
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+  SPRING_DATA_REDIS_HOST: "redis"
+  SPRING_DATA_REDIS_PORT: "6379"
+
+  # --- Gozlemlenebilirlik ---
+  MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: "http://zipkin:9411/api/v2/spans"
+
+  # --- Health probe'lari ---
+  # Bu ayar /actuator/health/liveness ve /actuator/health/readiness
+  # alt uclarini acar. Spring Boot k8s ortaminda bunu genelde otomatik
+  # aktive eder; ortam algilamasina guvenmemek icin acikca veriyoruz.
+  MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED: "true"
+  MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "health,info,prometheus,metrics"
